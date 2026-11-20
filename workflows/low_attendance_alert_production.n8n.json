@@ -1,0 +1,601 @@
+{
+  "name": "Low Attendance WhatsApp Alert (Production)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "SETUP (ek baar)\n1. Config node: sheetId, phoneNumberId bharo.\n2. Credentials: Google Sheets OAuth2 + Header Auth (Name: Authorization, Value: Bearer <PERMANENT TOKEN>).\n3. Sheet ke last me do column banao (Plain text): 'Last Alert Date' aur 'Alert Status'.\n4. Manual Test se check karo, phir upar Publish karo.\n\nConfig guide: threshold = is % se kam pe alert | minDays = kam se kam itne din ka data ho tab alert | repeatEveryDays = ek parent ko kitne din me ek baar (1 = roz) | mode: template (live) ya text (sirf test)",
+        "height": 300,
+        "width": 520
+      },
+      "id": "s1",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 18
+            }
+          ]
+        }
+      },
+      "id": "n1",
+      "name": "Daily 6 PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "n2",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0",
+              "name": "sheetId",
+              "value": "PASTE_GOOGLE_SHEET_ID_HERE",
+              "type": "string"
+            },
+            {
+              "id": "a1",
+              "name": "sheetName",
+              "value": "Sheet1",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "phoneNumberId",
+              "value": "PASTE_PHONE_NUMBER_ID_HERE",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "templateName",
+              "value": "low_attendance_alert_hi",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "languageCode",
+              "value": "hi",
+              "type": "string"
+            },
+            {
+              "id": "a5",
+              "name": "mode",
+              "value": "template",
+              "type": "string"
+            },
+            {
+              "id": "a6",
+              "name": "threshold",
+              "value": 50,
+              "type": "number"
+            },
+            {
+              "id": "a7",
+              "name": "minDays",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "a8",
+              "name": "repeatEveryDays",
+              "value": 7,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n3",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        90
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetName }}",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "n4",
+      "name": "Read Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        90
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sheet ke rows se attendance % nikalta hai aur batata hai kisko msg bhejna hai\nconst cfg = $('Config').first().json;\nconst threshold = Number(cfg.threshold);\nconst minDays = Number(cfg.minDays);\nconst gap = Number(cfg.repeatEveryDays);\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD\n\nconst toISO = (s) => {\n  s = String(s ?? '').trim();\n  let m;\n  if ((m = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/))) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;\n  if ((m = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/))) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;\n  return '';\n};\n\nconst out = [];\nfor (const item of $input.all()) {\n  const row = item.json;\n  const keys = Object.keys(row);\n  const find = (s) => keys.find(k => k.trim().toLowerCase().includes(s));\n  const nameK = find('name'), contactK = find('contact'), lastK = find('last alert');\n\n  // P / A gino (naya date column add hote hi apne aap count hoga)\n  let p = 0, a = 0;\n  for (const k of keys) {\n    const v = String(row[k] ?? '').trim().toUpperCase();\n    if (v === 'P') p++;\n    else if (v === 'A') a++;\n  }\n  const total = p + a;\n  if (total < minDays) continue;                       // bahut kam din ka data, abhi alert nahi\n  const pct = Math.round((p / total) * 1000) / 10;\n  if (pct >= threshold) continue;                      // attendance theek hai\n\n  // pichla alert kitne din pehle gaya\n  const last = toISO(lastK ? row[lastK] : '');\n  if (last && (Date.parse(today) - Date.parse(last)) / 86400000 < gap) continue;\n\n  // phone number saaf karo -> 91XXXXXXXXXX\n  let digits = String(row[contactK] ?? '').replace(/\\.0+$/, '').replace(/\\D/g, '');\n  if (digits.length > 10) digits = digits.slice(-10);\n  const valid = /^[6-9]\\d{9}$/.test(digits);\n\n  out.push({ json: {\n    row_number: row.row_number,\n    name: String(row[nameK] ?? '').trim(),\n    phone: valid ? '91' + digits : '',\n    valid, pct, today\n  } });\n}\nreturn out;"
+      },
+      "id": "n5",
+      "name": "Filter Low Attendance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        90
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n6",
+      "name": "Valid number?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        90
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Config').first().json.phoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Config').first().json.mode === 'template' ? {\n  messaging_product: 'whatsapp',\n  to: $json.phone,\n  type: 'template',\n  template: {\n    name: $('Config').first().json.templateName,\n    language: { code: $('Config').first().json.languageCode },\n    components: [{ type: 'body', parameters: [\n      { type: 'text', text: $json.name },\n      { type: 'text', text: $json.pct + '%' }\n    ] }]\n  }\n} : {\n  messaging_product: 'whatsapp',\n  to: $json.phone,\n  type: 'text',\n  text: { body: 'Low attendance alert: ' + $json.name + ' - attendance ' + $json.pct + '% (below ' + $('Config').first().json.threshold + '%). Please contact the institute.' }\n}) }}",
+        "options": {}
+      },
+      "id": "n7",
+      "name": "Send WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "WhatsApp Meta Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// WhatsApp API ka jawab padhkar sheet ke liye status banata hai\nconst r = $input.item.json;\nconst src = $('Valid number?').item.json;\nconst ok = !!(r.messages && r.messages[0] && r.messages[0].id);\nlet code = '';\nif (!ok) {\n  const m = String((r.error && r.error.message) || '');\n  const a = m.match(/#(\\d+)/) || m.match(/\"code\\\\*\":(\\d+)/);\n  code = a ? a[1] : 'unknown';\n}\nconst hints = {\n  '131030': 'number allowed list me nahi (test mode)',\n  '132001': 'template nahi mila',\n  '132000': 'template ke variables galat',\n  '190': 'token expire',\n  '131047': '24 ghante ki window band',\n  '131026': 'number WhatsApp pe nahi hai',\n  '131056': 'bahut zyada msg, baad me retry'\n};\nreturn { json: {\n  row_number: src.row_number,\n  ok,\n  today: src.today,\n  status: ok ? 'Sent ' + src.today : 'Failed ' + code + (hints[code] ? ' - ' + hints[code] : '')\n} };"
+      },
+      "id": "n8",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n9",
+      "name": "Sent OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetName }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "Last Alert Date": "={{ $json.today }}",
+            "Alert Status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "Last Alert Date",
+              "displayName": "Last Alert Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "Alert Status",
+              "displayName": "Alert Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "n10",
+      "name": "Mark Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1920,
+        -80
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetName }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "Alert Status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "Alert Status",
+              "displayName": "Alert Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "n11",
+      "name": "Mark Failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1920,
+        100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetName }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "Alert Status": "Invalid phone number"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "Alert Status",
+              "displayName": "Alert Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "n12",
+      "name": "Mark Invalid Number",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 6 PM": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Read Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Sheet": {
+      "main": [
+        [
+          {
+            "node": "Filter Low Attendance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Low Attendance": {
+      "main": [
+        [
+          {
+            "node": "Valid number?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid number?": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Invalid Number",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Result": {
+      "main": [
+        [
+          {
+            "node": "Sent OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sent OK?": {
+      "main": [
+        [
+          {
+            "node": "Mark Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  }
+}
